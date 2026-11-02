@@ -1,5 +1,9 @@
-// AlashRTC: будильник DS3231. Раз в сутки в заданное время часы поднимают флаг, и скетч включает светодиод.
-// Только DS3231 (у DS1307 будильника нет). Флаг читается опросом, провод на пин INT/SQW не нужен.
+// [ru] AlashRTC: будильник DS3231. Раз в сутки в заданное время часы поднимают флаг, и скетч включает светодиод.
+//      Только DS3231 (у DS1307 будильника нет). Флаг читается опросом, провод на пин INT/SQW не нужен.
+// [kk] AlashRTC: DS3231 оятқышы. Тәулігіне бір рет берілген уақытта сағат жалауды көтереді, ал скетч жарықдиодты қосады.
+//      Тек DS3231 (DS1307-де оятқыш жоқ). Жалау сұрау арқылы оқылады, INT/SQW пиніне сым керек емес.
+// [en] AlashRTC: a DS3231 alarm. Once a day at the set time the clock raises a flag, and the sketch switches an LED on.
+//      DS3231 only (the DS1307 has no alarm). The flag is read by polling, no wire to the INT/SQW pin is needed.
 #include <AlashRTC.h>
 
 AlashRTC rtc;
