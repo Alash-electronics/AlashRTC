@@ -1,8 +1,8 @@
 {
   "name": "AlashRTC",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Easy DS3231/DS1307 RTC library: time, date, unix, temperature, alarm, auto chip, clear tips (ru/kk/en), no RTClib needed",
-  "keywords": "DS3231, DS1307, RTC, clock, time, date, alarm, I2C, ZS-042",
+  "keywords": "DS3231, DS1307, RTC, clock, time, date, alarm, I2C, ZS-042, PCF8563, DS1302",
   "repository": {
     "type": "git",
     "url": "https://github.com/Alash-electronics/AlashRTC"

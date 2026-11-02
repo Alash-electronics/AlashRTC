@@ -3,7 +3,8 @@
 
 #define T(ru, kk, en) (_lang == LANG_KK ? F(kk) : _lang == LANG_EN ? F(en) : F(ru))
 
-static const uint8_t ADDR = 0x68;
+static const uint8_t ADDR = 0x68;            // DS3231 и DS1307
+static const uint8_t ADDR_PCF = 0x51;        // PCF8563
 static const uint8_t REG_TIME = 0x00;         // секунды, минуты, часы, день недели, дата, месяц, год
 static const uint8_t REG_ALARM1 = 0x07;       // DS3231: секунды, минуты, часы, день/дата
 static const uint8_t REG_CONTROL = 0x0E;      // DS3231
@@ -24,7 +25,9 @@ bool AlashRTC::begin(Chip chip, TwoWire &wire, bool startWire) {
   _wire = &wire;
   if (startWire) _wire->begin();
   _hasData = false;
-  _wire->beginTransmission(ADDR);
+  if (chip == CHIP_DS1302) { _err = ERR_NO_DEVICE; _chip = CHIP_NONE; return false; }   // DS1302 запускается через beginDS1302()
+  _addr = (chip == CHIP_PCF8563) ? ADDR_PCF : ADDR;
+  _wire->beginTransmission(_addr);
   if (_wire->endTransmission() != 0) {
     _err = ERR_NO_DEVICE;
     _chip = CHIP_NONE;
@@ -43,9 +46,31 @@ bool AlashRTC::begin(int sdaPin, int sclPin) {
 }
 #endif
 
+// По адресу 0x51 бывает не только PCF8563 (на модулях Tiny RTC там может отвечать память AT24C), поэтому содержимое проверяется:
+// секунды, минуты, часы и месяц обязаны быть правильным BCD, а три старших бита второго управляющего регистра всегда нули.
+bool AlashRTC::probePcf() {
+  uint8_t r[7], c2 = 0xFF;
+  _addr = ADDR_PCF;
+  _wire->beginTransmission(_addr);
+  if (_wire->endTransmission() != 0) return false;
+  if (!read8(0x01, c2) || (c2 & 0xE0) != 0) return false;
+  if (!readBytes(0x02, r, 7)) return false;
+  auto bcdOk = [](uint8_t v, uint8_t max) { return (v & 0x0F) <= 9 && (v >> 4) <= 9 && bcd2bin(v) <= max; };
+  return bcdOk(r[0] & 0x7F, 59) && bcdOk(r[1] & 0x7F, 59) && bcdOk(r[2] & 0x3F, 23) && bcdOk(r[3] & 0x3F, 31) && (r[4] & 0xF8) == 0 &&
+         bcdOk(r[5] & 0x1F, 12) && bcdOk(r[6], 99);
+}
+
 bool AlashRTC::probe() {
-  _wire->beginTransmission(ADDR);
+  _addr = ADDR;
+  _wire->beginTransmission(_addr);
   if (_wire->endTransmission() != 0) {
+    if (probePcf()) {
+      _chip = CHIP_PCF8563;
+      _err = ERR_OK;
+      update();
+      return _err == ERR_OK;
+    }
+    _addr = ADDR;
     _err = ERR_NO_DEVICE;
     return false;
   }
@@ -65,12 +90,152 @@ AlashRTC::Chip AlashRTC::detect() {
 }
 
 bool AlashRTC::isConnected() {
-  _wire->beginTransmission(ADDR);
+  if (_chip == CHIP_DS1302) return dsAlive();
+  _wire->beginTransmission(_addr);
   return _wire->endTransmission() == 0;
 }
 
 const __FlashStringHelper *AlashRTC::chipName() const {
-  return _chip == CHIP_DS3231 ? F("DS3231") : _chip == CHIP_DS1307 ? F("DS1307") : F("-");
+  switch (_chip) {
+    case CHIP_DS3231: return F("DS3231");
+    case CHIP_DS1307: return F("DS1307");
+    case CHIP_PCF8563: return F("PCF8563");
+    case CHIP_DS1302: return F("DS1302");
+    default: return F("-");
+  }
+}
+
+// ---- DS1302: три провода (CE, IO, SCLK) ---------------------------------------------------------
+// Команда: бит 7 всегда 1, бит 6 = 0 для часов (1 для памяти), биты 5..1 адрес, бит 0 = 1 чтение / 0 запись. Все байты младшим битом вперёд.
+// Запись: линию IO выставляем при низком SCLK, микросхема берёт бит по нарастающему фронту.
+// Чтение: первый бит данных микросхема выдаёт по спаду SCLK после восьмого бита команды, поэтому IO отпускаем ДО этого спада.
+
+void AlashRTC::dsBegin(uint8_t cmd) {
+  digitalWrite(_sclk, LOW);
+  digitalWrite(_ce, HIGH);
+  delayMicroseconds(4);                                  // время установки CE
+  pinMode(_io, OUTPUT);
+  for (uint8_t i = 0; i < 8; i++) {
+    digitalWrite(_io, (cmd >> i) & 1);
+    delayMicroseconds(1);
+    digitalWrite(_sclk, HIGH);
+    delayMicroseconds(1);
+    if (i == 7 && (cmd & 1)) pinMode(_io, INPUT);        // чтение: отпустить линию до спада
+    digitalWrite(_sclk, LOW);
+    delayMicroseconds(1);
+  }
+}
+
+void AlashRTC::dsEnd() {
+  digitalWrite(_ce, LOW);
+  pinMode(_io, INPUT);
+  delayMicroseconds(4);
+}
+
+void AlashRTC::dsWriteByte(uint8_t v) {
+  for (uint8_t i = 0; i < 8; i++) {
+    digitalWrite(_io, (v >> i) & 1);
+    delayMicroseconds(1);
+    digitalWrite(_sclk, HIGH);
+    delayMicroseconds(1);
+    digitalWrite(_sclk, LOW);
+    delayMicroseconds(1);
+  }
+}
+
+uint8_t AlashRTC::dsReadByte() {
+  uint8_t v = 0;
+  for (uint8_t i = 0; i < 8; i++) {
+    if (digitalRead(_io)) v |= (uint8_t)(1 << i);
+    digitalWrite(_sclk, HIGH);                           // следующий бит появится после спада
+    delayMicroseconds(1);
+    digitalWrite(_sclk, LOW);
+    delayMicroseconds(1);
+  }
+  return v;
+}
+
+uint8_t AlashRTC::dsRead1(uint8_t addr) {
+  dsBegin(0x81 | (addr << 1));
+  uint8_t v = dsReadByte();
+  dsEnd();
+  return v;
+}
+
+void AlashRTC::dsWrite1(uint8_t addr, uint8_t v) {
+  dsBegin(0x80 | (addr << 1));
+  dsWriteByte(v);
+  dsEnd();
+}
+
+// Проверка связи: регистр защиты записи принимает только старший бит. Записываем 0 и 0x80 и читаем обратно:
+// пустая линия (оборванный провод, нет питания) вернёт одно и то же в обоих случаях.
+bool AlashRTC::dsAlive() {
+  dsWrite1(7, 0x00);
+  bool a = dsRead1(7) == 0x00;
+  dsWrite1(7, 0x80);
+  bool b = dsRead1(7) == 0x80;
+  return a && b;
+}
+
+bool AlashRTC::beginDS1302(uint8_t cePin, uint8_t ioPin, uint8_t sclkPin) {
+  _ce = cePin; _io = ioPin; _sclk = sclkPin;
+  pinMode(_ce, OUTPUT);
+  pinMode(_sclk, OUTPUT);
+  pinMode(_io, INPUT);
+  digitalWrite(_ce, LOW);
+  digitalWrite(_sclk, LOW);
+  _hasData = false;
+  _chip = CHIP_NONE;
+  if (!dsAlive()) { _err = ERR_NO_DEVICE; return false; }
+  _chip = CHIP_DS1302;
+  _err = ERR_OK;
+  update();
+  return _err == ERR_OK;
+}
+
+// ---- Время в единой раскладке DS: сек, мин, час, день недели, дата, месяц, год (всё BCD) -------------------
+
+bool AlashRTC::readTime(uint8_t *b) {
+  if (_chip == CHIP_DS1302) {
+    dsBegin(0xBF);                                       // пакетное чтение: секунды, минуты, часы, дата, месяц, день недели, год, защита
+    uint8_t r[8];
+    for (uint8_t i = 0; i < 8; i++) r[i] = dsReadByte();
+    dsEnd();
+    b[0] = r[0]; b[1] = r[1];
+    b[2] = (r[2] & 0x80) ? (uint8_t)(0x40 | (r[2] & 0x3F)) : (uint8_t)(r[2] & 0x3F);   // бит 7 = 12-часовой режим, приводим к виду DS1307
+    b[3] = r[5]; b[4] = r[3]; b[5] = r[4]; b[6] = r[6];
+    return true;
+  }
+  if (_chip == CHIP_PCF8563) {
+    uint8_t r[7];
+    if (!readBytes(0x02, r, 7)) return false;
+    _osf = (r[0] & 0x80) != 0;                           // VL: напряжение падало, время недостоверно
+    b[0] = r[0] & 0x7F; b[1] = r[1] & 0x7F; b[2] = r[2] & 0x3F;
+    b[3] = r[4] & 0x07; b[4] = r[3] & 0x3F; b[5] = r[5] & 0x1F; b[6] = r[6];
+    return true;
+  }
+  return readBytes(REG_TIME, b, 7);
+}
+
+bool AlashRTC::writeTime(const uint8_t *b) {
+  if (_chip == CHIP_DS1302) {
+    dsWrite1(7, 0x00);                                   // снять защиту записи
+    dsBegin(0xBE);                                       // пакетная запись; секунды без бита CH, часы в 24-часовом режиме
+    dsWriteByte(b[0]); dsWriteByte(b[1]); dsWriteByte(b[2]);
+    dsWriteByte(b[4]); dsWriteByte(b[5]); dsWriteByte(b[3]); dsWriteByte(b[6]);
+    dsWriteByte(0x00);                                   // защита выключена: остальные функции библиотеки не мешают записи
+    dsEnd();
+    return true;
+  }
+  if (_chip == CHIP_PCF8563) {
+    uint8_t c1 = 0;
+    if (!read8(0x00, c1)) return false;
+    if (c1 & 0xA0 && !write8(0x00, c1 & ~0xA0)) return false;   // снять STOP (бит 5) и TEST1 (бит 7): иначе часы стоят
+    uint8_t r[7] = {b[0], b[1], b[2], b[4], (uint8_t)(bcd2bin(b[3]) % 7), b[5], b[6]};   // воскресенье = 0; бит века = 0 (20xx), VL сбрасывается
+    return writeBytes(0x02, r, 7);
+  }
+  return writeBytes(REG_TIME, b, 7);
 }
 
 // ---- Календарь -------------------------------------------------------------------
@@ -111,7 +276,7 @@ bool AlashRTC::setTime(uint16_t year, uint8_t month, uint8_t day, uint8_t hour, 
     return false;
   }
   uint8_t b[7] = {bin2bcd(second), bin2bcd(minute), bin2bcd(hour), weekday(year, month, day), bin2bcd(day), bin2bcd(month), bin2bcd(year - 2000)};
-  if (!writeBytes(REG_TIME, b, 7)) {
+  if (!writeTime(b)) {
     _err = ERR_I2C;
     return false;
   }
@@ -156,12 +321,12 @@ bool AlashRTC::setUnixTime(uint32_t sec) {
 
 bool AlashRTC::lostPower() {
   update();
-  return _chip == CHIP_DS3231 ? _osf : _halted;
+  return (_chip == CHIP_DS3231 || _chip == CHIP_PCF8563) ? _osf : _halted;
 }
 
 bool AlashRTC::isRunning() {
   update();
-  return !_halted && !(_chip == CHIP_DS3231 && _osf);
+  return !_halted && !((_chip == CHIP_DS3231 || _chip == CHIP_PCF8563) && _osf);
 }
 
 // ---- Чтение ------------------------------------------------------------------------
@@ -169,11 +334,11 @@ bool AlashRTC::isRunning() {
 void AlashRTC::update() {
   if (_chip == CHIP_NONE) return;
   uint8_t b[7];
-  if (!readBytes(REG_TIME, b, 7)) {
+  if (!readTime(b)) {
     _err = ERR_I2C;
     return;
   }
-  _halted = (_chip == CHIP_DS1307) && (b[0] & 0x80);     // DS1307: бит CH остановил часы
+  _halted = (_chip == CHIP_DS1307 || _chip == CHIP_DS1302) && (b[0] & 0x80);     // DS1307 и DS1302: бит CH остановил часы
   _s = bcd2bin(b[0] & 0x7F);
   _mi = bcd2bin(b[1] & 0x7F);
   if (b[2] & 0x40) {                                      // 12-часовой режим: бит 5 = PM
@@ -312,22 +477,26 @@ bool AlashRTC::setSquareWave(uint16_t hz) {
     uint8_t v = hz == 0 ? 0x00 : hz == 1 ? 0x10 : hz == 4096 ? 0x11 : hz == 8192 ? 0x12 : hz == 32768U ? 0x13 : 0xFF;
     return v != 0xFF && write8(0x07, v);
   }
+  if (_chip == CHIP_PCF8563) {                           // вывод CLKOUT: 32768, 1024, 32 и 1 Гц; 0 = выключен
+    uint8_t v = hz == 0 ? 0x00 : hz == 32768U ? 0x80 : hz == 1024 ? 0x81 : hz == 32 ? 0x82 : hz == 1 ? 0x83 : 0xFF;
+    return v != 0xFF && write8(0x0D, v);
+  }
   return false;
 }
 
 // ---- I2C -----------------------------------------------------------------------------------
 
 bool AlashRTC::readBytes(uint8_t reg, uint8_t *buf, uint8_t len) {
-  _wire->beginTransmission(ADDR);
+  _wire->beginTransmission(_addr);
   _wire->write(reg);
   if (_wire->endTransmission(false) != 0) return false;
-  if (_wire->requestFrom(ADDR, len) != len) return false;
+  if (_wire->requestFrom(_addr, len) != len) return false;
   for (uint8_t i = 0; i < len; i++) buf[i] = (uint8_t)_wire->read();
   return true;
 }
 
 bool AlashRTC::writeBytes(uint8_t reg, const uint8_t *buf, uint8_t len) {
-  _wire->beginTransmission(ADDR);
+  _wire->beginTransmission(_addr);
   _wire->write(reg);
   for (uint8_t i = 0; i < len; i++) _wire->write(buf[i]);
   return _wire->endTransmission() == 0;
@@ -342,9 +511,9 @@ const __FlashStringHelper *AlashRTC::errorText() {
   switch (_err) {
     case ERR_OK: return F("OK");
     case ERR_NO_DEVICE:
-      return T("Часы не найдены: проверьте SDA / SCL, питание (3.3-5 В) и GND. Адрес часов 0x68",
-               "Сағат табылмады: SDA / SCL, қуатты (3.3-5 В) және GND тексеріңіз. Сағат мекенжайы 0x68",
-               "The clock is not found: check SDA / SCL, power (3.3-5 V) and GND. The clock address is 0x68");
+      return T("Часы не найдены: проверьте SDA / SCL, питание (3.3-5 В) и GND. Адрес DS3231 / DS1307 0x68, PCF8563 0x51. У DS1302 три провода: проверьте RST, DAT, CLK и вызов beginDS1302()",
+               "Сағат табылмады: SDA / SCL, қуатты (3.3-5 В) және GND тексеріңіз. DS3231 / DS1307 мекенжайы 0x68, PCF8563 0x51. DS1302-де үш сым: RST, DAT, CLK және beginDS1302() шақыруын тексеріңіз",
+               "The clock is not found: check SDA / SCL, power (3.3-5 V) and GND. DS3231 / DS1307 is at 0x68, PCF8563 at 0x51. The DS1302 has three wires: check RST, DAT, CLK and the beginDS1302() call");
     case ERR_I2C:
       return T("Ошибка I2C: проверьте контакты и подтяжку линий", "I2C қатесі: байланысты және тартқыш резисторларды тексеріңіз",
                "I2C error: check connections and pull-up resistors");
@@ -353,9 +522,9 @@ const __FlashStringHelper *AlashRTC::errorText() {
                "Мұндай күн не уақыт болмайды (жыл 2000-2099, ай 1-12, күн күнтізбе бойынша, сағат 0-23)",
                "Such a date or time does not exist (year 2000-2099, month 1-12, valid day, hours 0-23)");
     case ERR_NOT_SUPPORTED:
-      return T("DS1307 не умеет температуру и будильники: они есть только у DS3231",
-               "DS1307 температура мен оятқышты білмейді: олар тек DS3231-де бар",
-               "DS1307 has no temperature or alarms: only the DS3231 does");
+      return T("Температура и будильники есть только у DS3231 (у DS1307, PCF8563 и DS1302 их нет)",
+               "Температура мен оятқыш тек DS3231-де бар (DS1307, PCF8563 және DS1302-де жоқ)",
+               "Temperature and alarms exist only on the DS3231 (the DS1307, PCF8563 and DS1302 have none)");
   }
   return F("");
 }
@@ -378,7 +547,7 @@ void AlashRTC::diagnose(Print &out) {
   out.print(T("Время: ", "Уақыт: ", "Time: "));
   out.println(buf);
   if (lostPower()) {
-    out.println(T("Часы теряли питание или остановились: время недостоверно. Поставьте его: setFromCompileTime() или setTime(...). Если так при каждом включении, замените батарейку CR2032 (у модуля с зарядкой ZS-042 не ставьте обычную CR2032 без доработки схемы заряда).",
+    out.println(T("Часы теряли питание или остановились: время недостоверно. Поставьте его: setFromCompileTime() или setTime(...). Если так при каждом включении, замените батарейку CR2032 (у DS1302 без батарейки часы не идут вовсе; у модуля с зарядкой ZS-042 не ставьте обычную CR2032 без доработки схемы заряда).",
                   "Сағат қуатсыз қалды немесе тоқтады: уақыт сенімсіз. Оны қойыңыз: setFromCompileTime() немесе setTime(...). Әр қосқанда осылай болса, CR2032 батареясын ауыстырыңыз.",
                   "The clock lost power or stopped: the time is not reliable. Set it with setFromCompileTime() or setTime(...). If this happens at every power-up, replace the CR2032 battery."));
   }

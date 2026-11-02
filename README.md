@@ -33,6 +33,7 @@ void loop() {
 - **Не спрашивает часы лишний раз:** быстрые повторные вызовы читают по I2C раз в 100 мс.
 - **Понятные подсказки** на русском, казахском и английском: `errorText()` и `diagnose(Serial)`.
 - Работает на **Arduino AVR, ESP32, ESP8266**; `begin(SDA, SCL)` для своих пинов.
+- **Четыре микросхемы:** DS3231, DS1307, PCF8563 (I2C) и DS1302 (три провода, `beginDS1302(RST, DAT, CLK)`). Дешёвые модули из наборов подходят.
 
 ### Подключение
 | Модуль часов | Uno / Nano | ESP32 |
@@ -53,7 +54,7 @@ void loop() {
 - Предупреждение про зарядку CR2032 на модулях ZS-042 есть только у нас.
 
 ### Примеры
-`Basic`, `SetTime`, `Alarm`, `Datalog`, `Diagnose`, `ESP32_CustomPins`
+`Basic`, `SetTime`, `Alarm`, `Datalog`, `Diagnose`, `ESP32_CustomPins`, `DS1302`
 
 ### Тесты
 BCD-регистры, определение микросхемы, дни недели и года (включая високосные), unix-время в обе стороны (границы 2000 и 2099), неверные даты, 12-часовой режим, температура с минусом, будильник, DS1307 проверены без железа на имитации регистров: `extras/test`.
@@ -91,6 +92,7 @@ void loop() {
 - **Артық сұрамайды:** жиі шақыру 100 мс сайын оқиды.
 - **Түсінікті кеңестер** орысша, қазақша, ағылшынша: `errorText()`, `diagnose(Serial)`.
 - **Arduino AVR, ESP32, ESP8266**; `begin(SDA, SCL)`.
+- **Төрт микросхема:** DS3231, DS1307, PCF8563 (I2C) және DS1302 (үш сым, `beginDS1302(RST, DAT, CLK)`). Жинақтардағы арзан модульдер жарайды.
 
 ### Қосу
 | Сағат модулі | Uno / Nano | ESP32 |
@@ -110,7 +112,7 @@ RTClib (Adafruit), DS3231 (Rodan), uRTCLib және DS3232RTC қарадық:
 - Апта күндерінің атаулары үш тілде: `dayName()`.
 
 ### Мысалдар
-`Basic`, `SetTime`, `Alarm`, `Datalog`, `Diagnose`, `ESP32_CustomPins`
+`Basic`, `SetTime`, `Alarm`, `Datalog`, `Diagnose`, `ESP32_CustomPins`, `DS1302`
 
 ### Тесттер
 BCD регистрлері, микросхеманы анықтау, апта күндері, unix-уақыт, қате күндер, 12 сағаттық режим, температура, оятқыш тексерілген: `extras/test`.
@@ -148,6 +150,7 @@ void loop() {
 - **Does not poll needlessly:** fast repeated calls read over I2C once per 100 ms.
 - **Clear tips** in Russian, Kazakh and English: `errorText()` and `diagnose(Serial)`.
 - Works on **Arduino AVR, ESP32, ESP8266**; `begin(SDA, SCL)` for custom pins.
+- **Four chips:** DS3231, DS1307, PCF8563 (I2C) and DS1302 (three wires, `beginDS1302(RST, DAT, CLK)`). The cheap kit modules work.
 
 ### Wiring
 | Clock module | Uno / Nano | ESP32 |
@@ -167,7 +170,7 @@ We looked at RTClib (Adafruit), DS3231 (Rodan), uRTCLib and DS3232RTC:
 - Day names in three languages with `dayName()`.
 
 ### Examples
-`Basic`, `SetTime`, `Alarm`, `Datalog`, `Diagnose`, `ESP32_CustomPins`
+`Basic`, `SetTime`, `Alarm`, `Datalog`, `Diagnose`, `ESP32_CustomPins`, `DS1302`
 
 ### Tests
 BCD registers, chip detection, weekdays and day of year (leap years), unix time both ways (2000 and 2099 bounds), invalid dates, 12-hour mode, negative temperature, alarm and DS1307 are checked without hardware: `extras/test`.

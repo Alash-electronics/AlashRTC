@@ -1,4 +1,4 @@
-// AlashRTC: часы реального времени DS3231 и DS1307 (модули ZS-042, Tiny RTC): дата, время, температура, будильники.
+// AlashRTC: часы реального времени DS3231, DS1307, PCF8563 (I2C) и DS1302 (три провода): дата, время, температура, будильники.
 // Без зависимостей, только встроенная Wire. MIT License. Alash Electronics, https://github.com/Alash-electronics/AlashRTC
 #ifndef ALASH_RTC_H
 #define ALASH_RTC_H
@@ -8,23 +8,26 @@
 
 class AlashRTC {
  public:
-  enum Chip : uint8_t { CHIP_NONE = 0, CHIP_DS3231, CHIP_DS1307 };
+  enum Chip : uint8_t { CHIP_NONE = 0, CHIP_DS3231, CHIP_DS1307, CHIP_PCF8563, CHIP_DS1302 };
   enum Error : uint8_t {
     ERR_OK = 0,
-    ERR_NO_DEVICE,    // на шине I2C нет ответа по адресу 0x68
+    ERR_NO_DEVICE,    // нет ответа: I2C по адресу 0x68 (DS3231 / DS1307) или 0x51 (PCF8563), либо нет связи с DS1302
     ERR_I2C,          // ошибка чтения или записи по I2C
     ERR_BAD_TIME,     // такой даты или времени не бывает
-    ERR_NOT_SUPPORTED // DS1307 не умеет температуру и будильники
+    ERR_NOT_SUPPORTED // температура и будильники есть только у DS3231
   };
   enum Language : uint8_t { LANG_RU = 0, LANG_KK = 1, LANG_EN = 2 };
 
   // ---- Запуск --------------------------------------------------------------
-  // begin() находит часы по адресу 0x68 и сам определяет DS3231 или DS1307 (можно указать явно).
+  // begin() находит часы по адресу 0x68 (сам определяет DS3231 или DS1307) или 0x51 (PCF8563). Можно указать микросхему явно.
   bool begin(TwoWire &wire = Wire, bool startWire = true);
   bool begin(Chip chip, TwoWire &wire = Wire, bool startWire = true);
 #if defined(ESP32) || defined(ESP8266)
   bool begin(int sdaPin, int sclPin);
 #endif
+  // DS1302 (дешёвый модуль с тремя проводами, не I2C): RST (CE), DAT (IO), CLK (SCLK) на любых пинах.
+  // Батарейка должна стоять: без неё часы не идут. Микросхема ничего не подтверждает, поэтому связь проверяется записью и чтением.
+  bool beginDS1302(uint8_t cePin, uint8_t ioPin, uint8_t sclkPin);
 
   // ---- Установка времени ----------------------------------------------------
   bool setTime(uint16_t year, uint8_t month, uint8_t day, uint8_t hour, uint8_t minute, uint8_t second = 0);
@@ -49,7 +52,7 @@ class AlashRTC {
   static uint8_t daysInMonth(uint16_t y, uint8_t m);
   static uint8_t weekday(uint16_t y, uint8_t m, uint8_t d);   // 1 = понедельник
 
-  // ---- Только DS3231 --------------------------------------------------------------
+  // ---- Только DS3231 (setSquareWave ещё и DS1307, PCF8563) --------------------------------------------------------------
   float temperature();                      // °C, шаг 0.25 (встроенный датчик)
   bool setAlarm(uint8_t hour, uint8_t minute, uint8_t second = 0);   // будильник раз в сутки в это время
   bool alarmFired();                        // будильник сработал (true, пока не вызовете clearAlarm)
@@ -69,6 +72,8 @@ class AlashRTC {
 
  private:
   TwoWire *_wire = &Wire;
+  uint8_t _addr = 0x68;
+  uint8_t _ce = 0, _io = 0, _sclk = 0;
   Chip _chip = CHIP_NONE;
   Error _err = ERR_OK;
   Language _lang = LANG_RU;
@@ -79,6 +84,17 @@ class AlashRTC {
 
   bool probe();
   Chip detect();
+  bool probePcf();
+  bool readTime(uint8_t *b);                // 7 байт в раскладке DS: сек, мин, час, день недели, дата, месяц, год
+  bool writeTime(const uint8_t *b);
+  // DS1302: протокол из трёх проводов
+  void dsBegin(uint8_t cmd);
+  void dsEnd();
+  void dsWriteByte(uint8_t v);
+  uint8_t dsReadByte();
+  bool dsAlive();
+  uint8_t dsRead1(uint8_t addr);
+  void dsWrite1(uint8_t addr, uint8_t v);
   bool readBytes(uint8_t reg, uint8_t *buf, uint8_t len);
   bool writeBytes(uint8_t reg, const uint8_t *buf, uint8_t len);
   bool write8(uint8_t reg, uint8_t v);

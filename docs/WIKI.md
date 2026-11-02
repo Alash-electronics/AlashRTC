@@ -51,6 +51,7 @@ void loop() {
 - **Не спрашивает часы лишний раз:** быстрые повторные вызовы читают по I2C раз в 100 мс.
 - **Понятные подсказки** на русском, казахском и английском: `errorText()` и `diagnose(Serial)`.
 - Работает на **Arduino AVR, ESP32, ESP8266**; `begin(SDA, SCL)` для своих пинов.
+- **Четыре микросхемы:** DS3231, DS1307, PCF8563 (I2C) и DS1302 (три провода, `beginDS1302(RST, DAT, CLK)`). Дешёвые модули из наборов подходят.
 
 ### Справочник по методам
 | Метод | Что делает |
@@ -67,6 +68,7 @@ void loop() {
 | `setAlarm(h, m, s) / alarmFired() / clearAlarm()` | Будильник раз в сутки (DS3231) |
 | `setSquareWave(hz)` | Меандр на выводе SQW |
 | `diagnose(Serial)` | Самопроверка и подсказки |
+| `beginDS1302(ce, io, sclk)` | DS1302: три провода RST / DAT / CLK на любых пинах |
 
 ### Если что-то не работает
 **Время сбрасывается при выключении питания**
@@ -81,11 +83,15 @@ void loop() {
 
 DS3231 очень точен (около минуты в год). Если уходит быстро, это DS1307 (кварц хуже) или китайская подделка. Поправка: ставить время раз в несколько месяцев.
 
+**DS1302 не отвечает или время стоит**
+
+Проверьте RST, DAT, CLK (не перепутаны ли) и питание. Батарейка CR2032 обязательна: без неё DS1302 не идёт, а `lostPower()` покажет true. Вызывайте `beginDS1302(RST, DAT, CLK)`, а не `begin()`.
+
 ### Самопроверка
 В библиотеке есть `diagnose(Serial)`: она печатает, что видит плата, и подсказывает, что проверить. Язык подсказок: `setLanguage(LANG_RU / LANG_KK / LANG_EN)`.
 
 ### Примеры
-`Basic`, `SetTime`, `Alarm`, `Datalog`, `Diagnose`, `ESP32_CustomPins`
+`Basic`, `SetTime`, `Alarm`, `Datalog`, `Diagnose`, `ESP32_CustomPins`, `DS1302`
 
 ---
 
@@ -136,6 +142,7 @@ void loop() {
 - **Артық сұрамайды:** жиі шақыру 100 мс сайын оқиды.
 - **Түсінікті кеңестер** орысша, қазақша, ағылшынша: `errorText()`, `diagnose(Serial)`.
 - **Arduino AVR, ESP32, ESP8266**; `begin(SDA, SCL)`.
+- **Төрт микросхема:** DS3231, DS1307, PCF8563 (I2C) және DS1302 (үш сым, `beginDS1302(RST, DAT, CLK)`). Жинақтардағы арзан модульдер жарайды.
 
 ### Әдістер анықтамасы
 | Әдіс | Не істейді |
@@ -152,6 +159,7 @@ void loop() {
 | `setAlarm(h, m, s) / alarmFired() / clearAlarm()` | Тәулігіне бір оятқыш |
 | `setSquareWave(hz)` | SQW шығысында меандр |
 | `diagnose(Serial)` | Өзін тексеру |
+| `beginDS1302(ce, io, sclk)` | DS1302: үш сым RST / DAT / CLK |
 
 ### Бірдеңе жұмыс істемесе
 **Қуат өшкенде уақыт ысырылады**
@@ -166,11 +174,15 @@ SDA/SCL, қуат және GND тексеріңіз. Diagnose мысалын і�
 
 DS3231 өте дәл. Тез кетсе, бұл DS1307 немесе жалған.
 
+**DS1302 жауап бермейді не уақыт тұр**
+
+RST, DAT, CLK (шатыспағанын) және қуатты тексеріңіз. CR2032 батареясы міндетті: онсыз DS1302 жүрмейді, `lostPower()` true көрсетеді. `begin()` емес, `beginDS1302(RST, DAT, CLK)` шақырыңыз.
+
 ### Өзін-өзі тексеру
 Кітапханада `diagnose(Serial)` бар: тақта не көргенін басып шығарады және нені тексеру керегін айтады. Кеңес тілі: `setLanguage(LANG_RU / LANG_KK / LANG_EN)`.
 
 ### Мысалдар
-`Basic`, `SetTime`, `Alarm`, `Datalog`, `Diagnose`, `ESP32_CustomPins`
+`Basic`, `SetTime`, `Alarm`, `Datalog`, `Diagnose`, `ESP32_CustomPins`, `DS1302`
 
 ---
 
@@ -221,6 +233,7 @@ void loop() {
 - **Does not poll needlessly:** fast repeated calls read over I2C once per 100 ms.
 - **Clear tips** in Russian, Kazakh and English: `errorText()` and `diagnose(Serial)`.
 - Works on **Arduino AVR, ESP32, ESP8266**; `begin(SDA, SCL)` for custom pins.
+- **Four chips:** DS3231, DS1307, PCF8563 (I2C) and DS1302 (three wires, `beginDS1302(RST, DAT, CLK)`). The cheap kit modules work.
 
 ### Method reference
 | Method | What it does |
@@ -237,6 +250,7 @@ void loop() {
 | `setAlarm(h, m, s) / alarmFired() / clearAlarm()` | Daily alarm (DS3231) |
 | `setSquareWave(hz)` | Square wave on the SQW pin |
 | `diagnose(Serial)` | Self-check and tips |
+| `beginDS1302(ce, io, sclk)` | DS1302: three wires RST / DAT / CLK on any pins |
 
 ### If something does not work
 **The time resets when power is off**
@@ -251,11 +265,15 @@ Check SDA/SCL, power and GND. Run the Diagnose example. The clock address is 0x6
 
 The DS3231 is very accurate (about a minute per year). If it drifts fast, it is a DS1307 (weaker crystal) or a counterfeit.
 
+**DS1302 does not answer or the time is frozen**
+
+Check RST, DAT, CLK (not swapped) and power. A CR2032 battery is required: the DS1302 does not run without it and `lostPower()` shows true. Call `beginDS1302(RST, DAT, CLK)`, not `begin()`.
+
 ### Self-check
 The library has `diagnose(Serial)`: it prints what the board sees and tells what to check. Tips language: `setLanguage(LANG_RU / LANG_KK / LANG_EN)`.
 
 ### Examples
-`Basic`, `SetTime`, `Alarm`, `Datalog`, `Diagnose`, `ESP32_CustomPins`
+`Basic`, `SetTime`, `Alarm`, `Datalog`, `Diagnose`, `ESP32_CustomPins`, `DS1302`
 
 ---
 

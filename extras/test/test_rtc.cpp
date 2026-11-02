@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include "Arduino.h"
 #include "Wire.h"
+#include "Ds1302.h"
 #include "AlashRTC.h"
 
 static int fails = 0;
@@ -118,6 +119,65 @@ int main() {
   l.setLanguage(AlashRTC::LANG_EN); CHECK(strcmp((const char *)l.dayName(), "Monday") == 0);
   l.setLanguage(AlashRTC::LANG_KK); CHECK(strcmp((const char *)l.dayName(), "Дүйсенбі") == 0);
   printf("--- diagnose ---\n"); g_rtc.reg[0x0F] = 0x88; l.diagnose(*(new Print));
+
+  // 13) PCF8563 (I2C 0x51): находится сам, VL = часы теряли питание, запись снимает STOP и VL, воскресенье = 0 в регистре
+  g_rtc = FakeRtc(); g_rtc.initPcf(); g_ms += 1000; AlashRTC p;
+  CHECK(p.begin() && p.chip() == AlashRTC::CHIP_PCF8563 && strcmp((const char *)p.chipName(), "PCF8563") == 0);
+  CHECK(p.lostPower() && !p.isRunning());
+  g_rtc.reg[0x00] = 0xA0;                                                  // STOP и TEST1 стоят
+  CHECK(p.setTime(2026, 11, 2, 14, 5, 9));
+  CHECK(g_rtc.reg[0x02] == 0x09 && g_rtc.reg[0x03] == 0x05 && g_rtc.reg[0x04] == 0x14 && g_rtc.reg[0x05] == 0x02 && g_rtc.reg[0x06] == 1 && g_rtc.reg[0x07] == 0x11 && g_rtc.reg[0x08] == 0x26);
+  CHECK((g_rtc.reg[0x00] & 0xA0) == 0 && !p.lostPower() && p.isRunning());
+  g_ms += 200; CHECK(p.year() == 2026 && p.month() == 11 && p.day() == 2 && p.hour() == 14 && p.minute() == 5 && p.second() == 9 && p.dayOfWeek() == 1);
+  p.setTime(2026, 11, 1, 0, 0, 0); CHECK(g_rtc.reg[0x06] == 0); g_ms += 200; CHECK(p.dayOfWeek() == 7);   // воскресенье
+  g_rtc.reg[0x07] |= 0x80; g_ms += 200; CHECK(p.month() == 11);                                              // бит века не мешает
+  g_rtc.reg[0x02] |= 0x80; g_ms += 200; CHECK(p.lostPower());                                                 // VL снова
+  CHECK(isnan(p.temperature()) && p.error() == AlashRTC::ERR_NOT_SUPPORTED);
+  CHECK(!p.setAlarm(1, 1) && !p.alarmFired());
+  CHECK(p.setSquareWave(1) && g_rtc.reg[0x0D] == 0x83 && p.setSquareWave(32768U) && g_rtc.reg[0x0D] == 0x80 && p.setSquareWave(0) && g_rtc.reg[0x0D] == 0x00 && !p.setSquareWave(77));
+  CHECK(p.isConnected());
+  CHECK(!p.setTime(2026, 2, 30, 0, 0, 0));
+  // явный выбор и защита от ложного срабатывания: на 0x51 может быть память AT24C
+  g_rtc = FakeRtc(); g_rtc.initPcf(); AlashRTC pe; CHECK(pe.begin(AlashRTC::CHIP_PCF8563) && pe.chip() == AlashRTC::CHIP_PCF8563);
+  g_rtc = FakeRtc(); g_rtc.initPcf(); memset(g_rtc.reg, 0xFF, sizeof g_rtc.reg); AlashRTC ee;
+  CHECK(!ee.begin() && ee.error() == AlashRTC::ERR_NO_DEVICE);
+  g_rtc = FakeRtc(); g_rtc.initPcf(); for (int i = 0; i < 64; i++) g_rtc.reg[i] = (uint8_t)(i * 37 + 11); AlashRTC ee2;
+  CHECK(!ee2.begin());
+  g_rtc = FakeRtc(); g_rtc.initPcf(); g_rtc.reg[0x01] = 0x20; AlashRTC ee4; CHECK(!ee4.begin());          // правдоподобное время, но у PCF8563 три старших бита reg1 всегда нули
+  g_rtc = FakeRtc(); g_rtc.initPcf(); g_rtc.present = false; AlashRTC ee3; CHECK(!ee3.begin() && !ee3.isConnected());
+  // DS3231 по 0x68 по-прежнему выигрывает (адрес 0x51 не проверяется, если ответил 0x68)
+  reset(); AlashRTC ds; CHECK(ds.begin() && ds.chip() == AlashRTC::CHIP_DS3231);
+
+  // 14) DS1302 (три провода): пакетные обмены, защита записи, 12-часовой режим, нет микросхемы
+  g_rtc = FakeRtc(); g_rtc.present = false; g_ds = Sim1302(); g_ms += 1000; AlashRTC d;
+  CHECK(d.beginDS1302(10, 11, 12) && d.chip() == AlashRTC::CHIP_DS1302 && strcmp((const char *)d.chipName(), "DS1302") == 0);
+  CHECK(d.lostPower() && !d.isRunning());                                  // CH = 1 после включения
+  CHECK(d.setTime(2026, 11, 2, 14, 5, 9));
+  CHECK(g_ds.clk[0] == 0x09 && g_ds.clk[1] == 0x05 && g_ds.clk[2] == 0x14 && g_ds.clk[3] == 0x02 && g_ds.clk[4] == 0x11 && g_ds.clk[5] == 1 && g_ds.clk[6] == 0x26);
+  CHECK(!d.lostPower() && d.isRunning());
+  g_ms += 200; CHECK(d.year() == 2026 && d.month() == 11 && d.day() == 2 && d.hour() == 14 && d.minute() == 5 && d.second() == 9 && d.dayOfWeek() == 1);
+  CHECK(g_ds.burstReads >= 1 && g_ds.burstWrites >= 1);
+  d.setTime(2000, 2, 29, 23, 59, 58); g_ms += 200; CHECK(d.year() == 2000 && d.month() == 2 && d.day() == 29 && d.hour() == 23 && d.second() == 58);
+  g_ds.clk[2] = 0x80 | 0x20 | 0x11; g_ms += 200; CHECK(d.hour() == 23);
+  g_ds.clk[2] = 0x80 | 0x12;        g_ms += 200; CHECK(d.hour() == 0);
+  g_ds.clk[2] = 0x80 | 0x20 | 0x12; g_ms += 200; CHECK(d.hour() == 12);
+  g_ds.clk[2] = 0x80 | 0x01;        g_ms += 200; CHECK(d.hour() == 1);
+  g_ds.clk[0] |= 0x80; g_ms += 200; CHECK(d.lostPower());                  // часы остановлены
+  CHECK(isnan(d.temperature()) && d.error() == AlashRTC::ERR_NOT_SUPPORTED && !d.setAlarm(1, 1) && !d.setSquareWave(1));
+  CHECK(d.isConnected());
+  CHECK(g_ds.violations == 0 && g_ds.contention == 0 && g_ds.lvCe == 0 && g_ds.modeIo == INPUT);
+  CHECK(!d.setTime(2026, 4, 31, 0, 0, 0) && d.error() == AlashRTC::ERR_BAD_TIME);
+  // запись при включённой защите не проходит бесшумно: библиотека сама снимает защиту; проверим, что после неё часы действительно записались
+  g_ds.clk[7] = 0x80; d.setTime(2030, 6, 7, 8, 9, 10); g_ms += 200; CHECK(d.year() == 2030 && d.minute() == 9);
+  // нет микросхемы: линия IO висит в воздухе (0 или 1) или модуль не подключён
+  g_ds = Sim1302(); g_ds.present = false; g_ds.floatHigh = false; AlashRTC d0; CHECK(!d0.beginDS1302(10, 11, 12) && d0.error() == AlashRTC::ERR_NO_DEVICE && d0.chip() == AlashRTC::CHIP_NONE);
+  g_ds = Sim1302(); g_ds.present = false; g_ds.floatHigh = true;  AlashRTC d1; CHECK(!d1.beginDS1302(10, 11, 12));
+  // другие пины
+  g_ds = Sim1302(); g_ds.ce = 2; g_ds.io = 3; g_ds.sclk = 4; AlashRTC d2; CHECK(d2.beginDS1302(2, 3, 4) && d2.setTime(2027, 1, 2, 3, 4, 5)); g_ms += 200; CHECK(d2.second() == 5 && g_ds.violations == 0);
+  // потеря связи после запуска: линия отвечает пустотой, isConnected ложь
+  g_ds.present = false; CHECK(!d2.isConnected());
+  // diagnose
+  g_ds = Sim1302(); AlashRTC d3; d3.beginDS1302(10, 11, 12); d3.setLanguage(AlashRTC::LANG_EN); printf("--- diagnose DS1302 ---\n"); d3.diagnose(*(new Print));
 
   if (fails) { printf("FAILED: %d\n", fails); return 1; }
   printf("ALL TESTS PASSED\n");
